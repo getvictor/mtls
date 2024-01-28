@@ -1,3 +1,5 @@
+Full article: [Mutual TLS intro and hands-on example](https://victoronsoftware.com/posts/mtls-hello-world/)
+
 `curl` can use `--insecure` to ignore the server certificate:
 ```shell
 curl --insecure https://localhost:8888/hello-world.txt
