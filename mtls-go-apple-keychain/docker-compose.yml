@@ -1,0 +1,22 @@
+---
+version: "2"
+services:
+  nginx-tls:
+    image: nginx
+    volumes:
+      - ./certs/server.crt:/etc/nginx/certificates/server.crt
+      - ./certs/server.key:/etc/nginx/certificates/server.key
+      - ./nginx-tls/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx-tls/hello-world.txt:/www/data/hello-world.txt
+    ports:
+      - "8888:8888"
+  nginx-mtls:
+    image: nginx
+    volumes:
+      - ./certs/server.crt:/etc/nginx/certificates/server.crt
+      - ./certs/server.key:/etc/nginx/certificates/server.key
+      - ./certs/client-ca.crt:/etc/nginx/certificates/client-ca.crt
+      - ./nginx-mtls/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx-mtls/hello-world.txt:/www/data/hello-world.txt
+    ports:
+      - "8889:8889"
