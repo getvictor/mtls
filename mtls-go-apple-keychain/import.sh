@@ -9,4 +9,4 @@ security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain 
 security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/client-ca.crt
 # Import the client TLS certificate and key
 security import certs/client.crt -k /Library/Keychains/System.keychain
-security import certs/client.key -k /Library/Keychains/System.keychain -x -T /usr/bin/curl -T /Applications/Safari.app -T '/Applications/Google Chrome.app' -T $PWD/client-signer
+security import certs/client.key -k /Library/Keychains/System.keychain -x -T $PWD/client-signer -T /usr/bin/curl -T /Applications/Safari.app -T '/Applications/Google Chrome.app'
