@@ -1,1 +1,1 @@
-Full article: Coming soon to https://victoronsoftware.com/
+Full article: https://victoronsoftware.com/posts/mtls-go-client-using-apple-keychain/
