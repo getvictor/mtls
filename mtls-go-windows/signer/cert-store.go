@@ -2,15 +2,17 @@
 
 package signer
 
+import "C"
 import (
 	"bytes"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"golang.org/x/sys/windows"
 	"io"
+	"runtime"
+	"time"
 	"unsafe"
 )
 
@@ -19,11 +21,15 @@ const (
 	supportedAlgorithm = tls.PSSWithSHA256
 	commonName         = "testClientTLS"
 	windowsStoreName   = "MY"
+	nCryptSilentFlag   = 0x00000040 // ncrypt.h NCRYPT_SILENT_FLAG
 )
 
 var (
-	crypt32                    = windows.MustLoadDLL("crypt32.dll")
-	certFindCertificateInStore = crypt32.MustFindProc("CertFindCertificateInStore")
+	crypt32                           = windows.MustLoadDLL("crypt32.dll")
+	certFindCertificateInStore        = crypt32.MustFindProc("CertFindCertificateInStore")
+	cryptAcquireCertificatePrivateKey = crypt32.MustFindProc("CryptAcquireCertificatePrivateKey")
+	nCrypt                            = windows.MustLoadDLL("ncrypt.dll")
+	nCryptSignHash                    = nCrypt.MustFindProc("NCryptSignHash")
 )
 
 func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
@@ -70,16 +76,25 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 			uintptr(unsafe.Pointer(commonNamePtr)),
 			uintptr(unsafe.Pointer(pPrevCertContext)),
 		)
-		if certContextPtr == 0 && err != nil {
+		if certContextPtr == 0 {
 			return nil, err
 		}
-		// We can further filter the certificate we want here.
+		// We can extract the certificate chain and further filter the certificate we want here.
 		certContext = (*windows.CertContext)(unsafe.Pointer(certContextPtr))
 		break
 	}
-	defer func(ctx *windows.CertContext) {
-		_ = windows.CertFreeCertificateContext(ctx)
-	}(certContext)
+
+	customSigner := &CustomSigner{
+		store:              store,
+		windowsCertContext: certContext,
+	}
+	// Set a finalizer to release Windows resources when the CustomSigner is garbage collected.
+	runtime.SetFinalizer(
+		customSigner, func(c *CustomSigner) {
+			_ = windows.CertFreeCertificateContext(c.windowsCertContext)
+			_ = windows.CertCloseStore(c.store, 0)
+		},
+	)
 
 	// Copy the certificate data so that we have our own copy outside the windows context
 	encodedCert := unsafe.Slice(certContext.EncodedCert, certContext.Length)
@@ -89,9 +104,13 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 		return nil, err
 	}
 
-	customSigner := &CustomSigner{
-		x509Cert: foundCert,
+	customSigner.x509Cert = foundCert
+
+	// Make sure certificate is not expired
+	if foundCert.NotAfter.After(time.Now()) {
+		return nil, fmt.Errorf("certificate with common name %s is expired", foundCert.Subject.CommonName)
 	}
+
 	certificate := tls.Certificate{
 		Certificate:                  [][]byte{foundCert.Raw},
 		PrivateKey:                   customSigner,
@@ -103,7 +122,9 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 
 // CustomSigner is a crypto.Signer that uses the client certificate and key to sign
 type CustomSigner struct {
-	x509Cert *x509.Certificate
+	store              windows.Handle
+	windowsCertContext *windows.CertContext
+	x509Cert           *x509.Certificate
 }
 
 func (k *CustomSigner) Public() crypto.PublicKey {
@@ -113,5 +134,58 @@ func (k *CustomSigner) Public() crypto.PublicKey {
 
 func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
 	fmt.Printf("crypto.Signer.Sign with key type %T, opts type %T, hash %s\n", k.Public(), opts, opts.HashFunc().String())
-	return nil, errors.New("not implemented")
+
+	// Get private key
+	var (
+		privateKey                  windows.Handle
+		pdwKeySpec                  uintptr
+		pfCallerFreeProvOrNCryptKey uintptr
+	)
+	resultBool, _, err := cryptAcquireCertificatePrivateKey.Call(
+		uintptr(unsafe.Pointer(k.windowsCertContext)),
+		windows.CRYPT_ACQUIRE_CACHE_FLAG|windows.CRYPT_ACQUIRE_SILENT_FLAG|windows.CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG,
+		uintptr(0),
+		uintptr(unsafe.Pointer(&privateKey)),
+		pdwKeySpec,
+		pfCallerFreeProvOrNCryptKey,
+	)
+	if resultBool == 0 {
+		return nil, err
+	}
+
+	// Note: RSA padding may be needed.
+
+	// Sign the digest
+	// The first call to NCryptSignHash retrieves the size of the signature
+	var size uint32
+	success, _, _ := nCryptSignHash.Call(
+		uintptr(privateKey),
+		uintptr(0),
+		uintptr(unsafe.Pointer(&digest[0])),
+		uintptr(len(digest)),
+		uintptr(0),
+		uintptr(0),
+		uintptr(unsafe.Pointer(&size)),
+		uintptr(nCryptSilentFlag),
+	)
+	if success != 0 {
+		return nil, fmt.Errorf("NCryptSignHash: failed to get signature length: %#x", success)
+	}
+
+	// The second call to NCryptSignHash retrieves the signature
+	signature = make([]byte, size)
+	success, _, _ = nCryptSignHash.Call(
+		uintptr(privateKey),
+		uintptr(0),
+		uintptr(unsafe.Pointer(&digest[0])),
+		uintptr(len(digest)),
+		uintptr(unsafe.Pointer(&signature[0])),
+		uintptr(size),
+		uintptr(unsafe.Pointer(&size)),
+		uintptr(nCryptSilentFlag),
+	)
+	if success != 0 {
+		return nil, fmt.Errorf("NCryptSignHash: failed to generate signature: %#x", success)
+	}
+	return signature, nil
 }
