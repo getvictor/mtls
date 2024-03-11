@@ -70,7 +70,7 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 			uintptr(unsafe.Pointer(commonNamePtr)),
 			uintptr(unsafe.Pointer(pPrevCertContext)),
 		)
-		if err != nil {
+		if certContextPtr == 0 && err != nil {
 			return nil, err
 		}
 		// We can further filter the certificate we want here.
@@ -97,6 +97,7 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 		PrivateKey:                   customSigner,
 		SupportedSignatureAlgorithms: []tls.SignatureScheme{supportedAlgorithm},
 	}
+	fmt.Printf("Found certificate with common name %s\n", foundCert.Subject.CommonName)
 	return &certificate, nil
 }
 
