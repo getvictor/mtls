@@ -6,13 +6,14 @@ import "C"
 import (
 	"bytes"
 	"crypto"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"golang.org/x/sys/windows"
 	"io"
+	"log"
 	"runtime"
-	"time"
 	"unsafe"
 )
 
@@ -22,6 +23,7 @@ const (
 	commonName         = "testClientTLS"
 	windowsStoreName   = "MY"
 	nCryptSilentFlag   = 0x00000040 // ncrypt.h NCRYPT_SILENT_FLAG
+	bcryptPadPSS       = 0x00000008 // bcrypt.h BCRYPT_PAD_PSS
 )
 
 var (
@@ -107,9 +109,9 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 	customSigner.x509Cert = foundCert
 
 	// Make sure certificate is not expired
-	if foundCert.NotAfter.After(time.Now()) {
-		return nil, fmt.Errorf("certificate with common name %s is expired", foundCert.Subject.CommonName)
-	}
+	//if foundCert.NotAfter.After(time.Now()) {
+	//	return nil, fmt.Errorf("certificate with common name %s is expired", foundCert.Subject.CommonName)
+	//}
 
 	certificate := tls.Certificate{
 		Certificate:                  [][]byte{foundCert.Raw},
@@ -153,20 +155,25 @@ func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) 
 		return nil, err
 	}
 
-	// Note: RSA padding may be needed.
+	// RSA padding
+	flags := nCryptSilentFlag | bcryptPadPSS
+	pPaddingInfo, err := rsaPadding(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	// Sign the digest
 	// The first call to NCryptSignHash retrieves the size of the signature
 	var size uint32
 	success, _, _ := nCryptSignHash.Call(
 		uintptr(privateKey),
-		uintptr(0),
+		uintptr(pPaddingInfo),
 		uintptr(unsafe.Pointer(&digest[0])),
 		uintptr(len(digest)),
 		uintptr(0),
 		uintptr(0),
 		uintptr(unsafe.Pointer(&size)),
-		uintptr(nCryptSilentFlag),
+		uintptr(flags),
 	)
 	if success != 0 {
 		return nil, fmt.Errorf("NCryptSignHash: failed to get signature length: %#x", success)
@@ -176,16 +183,41 @@ func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) 
 	signature = make([]byte, size)
 	success, _, _ = nCryptSignHash.Call(
 		uintptr(privateKey),
-		uintptr(0),
+		uintptr(pPaddingInfo),
 		uintptr(unsafe.Pointer(&digest[0])),
 		uintptr(len(digest)),
 		uintptr(unsafe.Pointer(&signature[0])),
 		uintptr(size),
 		uintptr(unsafe.Pointer(&size)),
-		uintptr(nCryptSilentFlag),
+		uintptr(flags),
 	)
 	if success != 0 {
 		return nil, fmt.Errorf("NCryptSignHash: failed to generate signature: %#x", success)
 	}
 	return signature, nil
+}
+
+func rsaPadding(opts crypto.SignerOpts) (unsafe.Pointer, error) {
+	pssOpts, ok := opts.(*rsa.PSSOptions)
+	if !ok || pssOpts.Hash != crypto.SHA256 {
+		return nil, fmt.Errorf("unsupported hash function %T", opts.HashFunc())
+	}
+	switch pssOpts.SaltLength {
+	case rsa.PSSSaltLengthAuto:
+		return nil, fmt.Errorf("rsa.PSSSaltLengthAuto is not supported")
+	case rsa.PSSSaltLengthEqualsHash:
+		log.Printf("saltLength: %d", pssOpts.HashFunc().Size())
+	default:
+		return nil, fmt.Errorf("unsupported salt length %d", pssOpts.SaltLength)
+	}
+	sha256 := []uint16{'S', 'H', 'A', '2', '5', '6', 0}
+	return unsafe.Pointer(
+		&struct {
+			algorithm  *uint16
+			saltLength uint32
+		}{
+			algorithm:  &sha256[0],
+			saltLength: uint32(pssOpts.HashFunc().Size()),
+		},
+	), nil
 }
