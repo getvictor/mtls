@@ -21,7 +21,7 @@ const (
 	commonName         = "testClientTLS"
 	windowsStoreName   = "MY"
 	nCryptSilentFlag   = 0x00000040 // ncrypt.h NCRYPT_SILENT_FLAG
-	bcryptPadPSS       = 0x00000008 // bcrypt.h BCRYPT_PAD_PSS
+	bCryptPadPss       = 0x00000008 // bcrypt.h BCRYPT_PAD_PSS
 )
 
 var (
@@ -106,11 +106,6 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 
 	customSigner.x509Cert = foundCert
 
-	// Make sure certificate is not expired
-	//if foundCert.NotAfter.After(time.Now()) {
-	//	return nil, fmt.Errorf("certificate with common name %s is expired", foundCert.Subject.CommonName)
-	//}
-
 	certificate := tls.Certificate{
 		Certificate:                  [][]byte{foundCert.Raw},
 		PrivateKey:                   customSigner,
@@ -153,9 +148,9 @@ func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) 
 		return nil, err
 	}
 
-	// RSA padding
-	flags := nCryptSilentFlag | bcryptPadPSS
-	pPaddingInfo, err := rsaPadding(opts)
+	// We always use RSA-PSS padding
+	flags := nCryptSilentFlag | bCryptPadPss
+	pPaddingInfo, err := getRsaPssPadding(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -195,22 +190,27 @@ func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) 
 	return signature, nil
 }
 
-func rsaPadding(opts crypto.SignerOpts) (unsafe.Pointer, error) {
+func getRsaPssPadding(opts crypto.SignerOpts) (unsafe.Pointer, error) {
 	pssOpts, ok := opts.(*rsa.PSSOptions)
 	if !ok || pssOpts.Hash != crypto.SHA256 {
-		return nil, fmt.Errorf("unsupported hash function %T", opts.HashFunc())
+		return nil, fmt.Errorf("unsupported hash function %s", opts.HashFunc().String())
 	}
 	if pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash {
 		return nil, fmt.Errorf("unsupported salt length %d", pssOpts.SaltLength)
 	}
-	sha256 := []uint16{'S', 'H', 'A', '2', '5', '6', 0}
+	sha256, _ := windows.UTF16PtrFromString("SHA256")
+	// Create BCRYPT_PSS_PADDING_INFO structure:
+	// typedef struct _BCRYPT_PSS_PADDING_INFO {
+	// 	LPCWSTR pszAlgId;
+	// 	ULONG   cbSalt;
+	// } BCRYPT_PSS_PADDING_INFO;
 	return unsafe.Pointer(
 		&struct {
-			algorithm  *uint16
-			saltLength uint32
+			pszAlgId *uint16
+			cbSalt   uint32
 		}{
-			algorithm:  &sha256[0],
-			saltLength: uint32(pssOpts.HashFunc().Size()),
+			pszAlgId: sha256,
+			cbSalt:   uint32(pssOpts.HashFunc().Size()),
 		},
 	), nil
 }
