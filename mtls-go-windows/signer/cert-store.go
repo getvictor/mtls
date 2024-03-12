@@ -2,7 +2,6 @@
 
 package signer
 
-import "C"
 import (
 	"bytes"
 	"crypto"
@@ -12,7 +11,6 @@ import (
 	"fmt"
 	"golang.org/x/sys/windows"
 	"io"
-	"log"
 	"runtime"
 	"unsafe"
 )
@@ -202,12 +200,7 @@ func rsaPadding(opts crypto.SignerOpts) (unsafe.Pointer, error) {
 	if !ok || pssOpts.Hash != crypto.SHA256 {
 		return nil, fmt.Errorf("unsupported hash function %T", opts.HashFunc())
 	}
-	switch pssOpts.SaltLength {
-	case rsa.PSSSaltLengthAuto:
-		return nil, fmt.Errorf("rsa.PSSSaltLengthAuto is not supported")
-	case rsa.PSSSaltLengthEqualsHash:
-		log.Printf("saltLength: %d", pssOpts.HashFunc().Size())
-	default:
+	if pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash {
 		return nil, fmt.Errorf("unsupported salt length %d", pssOpts.SaltLength)
 	}
 	sha256 := []uint16{'S', 'H', 'A', '2', '5', '6', 0}
