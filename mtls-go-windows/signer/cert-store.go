@@ -25,11 +25,8 @@ const (
 )
 
 var (
-	crypt32                           = windows.MustLoadDLL("crypt32.dll")
-	certFindCertificateInStore        = crypt32.MustFindProc("CertFindCertificateInStore")
-	cryptAcquireCertificatePrivateKey = crypt32.MustFindProc("CryptAcquireCertificatePrivateKey")
-	nCrypt                            = windows.MustLoadDLL("ncrypt.dll")
-	nCryptSignHash                    = nCrypt.MustFindProc("NCryptSignHash")
+	nCrypt         = windows.MustLoadDLL("ncrypt.dll")
+	nCryptSignHash = nCrypt.MustFindProc("NCryptSignHash")
 )
 
 func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
@@ -68,19 +65,18 @@ func GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, e
 	var certContext *windows.CertContext
 	commonNamePtr, err := windows.UTF16PtrFromString(commonName)
 	for {
-		certContextPtr, _, err := certFindCertificateInStore.Call(
-			uintptr(store),
-			uintptr(windows.X509_ASN_ENCODING),
-			uintptr(0),
-			uintptr(windows.CERT_FIND_SUBJECT_STR),
-			uintptr(unsafe.Pointer(commonNamePtr)),
-			uintptr(unsafe.Pointer(pPrevCertContext)),
+		certContext, err = windows.CertFindCertificateInStore(
+			store,
+			windows.X509_ASN_ENCODING,
+			0,
+			windows.CERT_FIND_SUBJECT_STR,
+			unsafe.Pointer(commonNamePtr),
+			pPrevCertContext,
 		)
-		if certContextPtr == 0 {
+		if err != nil {
 			return nil, err
 		}
 		// We can extract the certificate chain and further filter the certificate we want here.
-		certContext = (*windows.CertContext)(unsafe.Pointer(certContextPtr))
 		break
 	}
 
@@ -133,18 +129,18 @@ func (k *CustomSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) 
 	// Get private key
 	var (
 		privateKey                  windows.Handle
-		pdwKeySpec                  uintptr
-		pfCallerFreeProvOrNCryptKey uintptr
+		pdwKeySpec                  uint32
+		pfCallerFreeProvOrNCryptKey bool
 	)
-	resultBool, _, err := cryptAcquireCertificatePrivateKey.Call(
-		uintptr(unsafe.Pointer(k.windowsCertContext)),
+	err = windows.CryptAcquireCertificatePrivateKey(
+		k.windowsCertContext,
 		windows.CRYPT_ACQUIRE_CACHE_FLAG|windows.CRYPT_ACQUIRE_SILENT_FLAG|windows.CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG,
-		uintptr(0),
-		uintptr(unsafe.Pointer(&privateKey)),
-		pdwKeySpec,
-		pfCallerFreeProvOrNCryptKey,
+		nil,
+		&privateKey,
+		&pdwKeySpec,
+		&pfCallerFreeProvOrNCryptKey,
 	)
-	if resultBool == 0 {
+	if err != nil {
 		return nil, err
 	}
 
