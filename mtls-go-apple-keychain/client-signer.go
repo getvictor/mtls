@@ -13,6 +13,7 @@ import (
 func main() {
 
 	urlPath := flag.String("url", "", "URL to make request to")
+	commonName := flag.String("common_name", "testClientTLS", "Common Name of the client certificate")
 	flag.Parse()
 	if *urlPath == "" {
 		log.Fatalf("URL to make request to is required")
@@ -21,7 +22,7 @@ func main() {
 	client := http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				GetClientCertificate: signer.GetClientCertificate,
+				GetClientCertificate: signer.GetClientCertificate(*commonName),
 				MinVersion:           tls.VersionTLS13,
 				MaxVersion:           tls.VersionTLS13,
 			},
