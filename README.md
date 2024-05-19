@@ -1,1 +1,1 @@
-Code examples for mutual TLS (mTLS) articles from https://victoronsoftware.com/categories/mtls/
+Code examples for [mutual TLS (mTLS) articles](https://victoronsoftware.com/posts/mtls/).
